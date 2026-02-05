@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Mario Bros - Phiên bản Hoàn chỉnh</title>
+    <style>
+        body { 
+            margin: 0; 
+            padding: 0;
+            background: #1a1a1a; 
+            display: flex; 
+            flex-direction: column; 
+            justify-content: center; 
+            align-items: center; 
+            height: 100vh; 
+            color: white; 
+            font-family: 'Arial', sans-serif;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 50px rgba(0,0,0,0.5);
+        }
+        canvas { 
+            background: #5c94fc; 
+            border: 4px solid #fff; 
+            display: block;
+            image-rendering: pixelated; /* Giữ độ sắc nét cho ảnh pixel */
+        }
+        #ui { 
+            position: absolute; 
+            top: 20px; 
+            left: 20px;
+            right: 20px;
+            display: flex; 
+            justify-content: space-between;
+            font-size: 20px; 
+            font-weight: bold; 
+            text-shadow: 2px 2px #000;
+            pointer-events: none;
+        }
+        .instructions {
+            margin-top: 15px;
+            text-align: center;
+            color: #bdc3c7;
+        }
+        kbd {
+            background-color: #eee;
+            border-radius: 3px;
+            border: 1px solid #b4b4b4;
+            color: #333;
+            padding: 2px 6px;
+            font-family: Courier, monospace;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="ui">
+            <div>SCORE: <span id="scr">000000</span></div>
+            <div>STATUS: <span id="stt">SMALL</span></div>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <div class="instructions">
+        Di chuyển: <kbd>←</kbd> <kbd>→</kbd> | Nhảy: <kbd>Space</kbd> | Bắn lửa: <kbd>F</kbd> (Khi đã ăn nấm)
+    </div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 800;
+    canvas.height = 400;
+
+    // --- Khai báo hằng số và trạng thái ---
+    const GRAVITY = 0.8;
+    const FRICTION = 0.8;
+    const MARIO_SPEED = 5;
+    const JUMP_FORCE = -15;
+
+    let score = 0;
+    let scrollOffset = 0;
+    let gameActive = true;
+
+    // --- Đối tượng người chơi ---
+    const player = {
+        x: 100, y: 300, 
+        w: 36, h: 48, 
+        dx: 0, dy: 0,
+        isBig: false,
+        canShoot: false,
+        grounded: false,
+        direction: 'right'
+    };
+
+    // --- Khởi tạo Map ---
+    const platforms = [
+        // Mặt đất
+        { x: 0, y: 350, w: 3000, h: 50, type: 'ground' },
+        // Các khối gạch và Lucky Blocks
+        { x: 250, y: 220, w: 40, h: 40, type: 'lucky', content: 'mushroom', used: false },
+        { x: 290, y: 220, w: 40, h: 40, type: 'brick' },
+        { x: 330, y: 220, w: 40, h: 40, type: 'lucky', content: 'coin', used: false },
+        { x: 370, y: 220, w: 40, h: 40, type: 'brick' },
+        // Ống cống
+        { x: 550, y: 270, w: 60, h: 80, type: 'pipe' },
+        { x: 800, y: 230, w: 60, h: 120, type: 'pipe' }
+    ];
+
+    const enemies = [
+        { x: 450, y: 320, w: 30, h: 30, dx: -2, alive: true },
+        { x: 950, y: 320, w: 30, h: 30, dx: -2, alive: true }
+    ];
+
+    const items = [];
+    const fireballs = [];
+
+    // --- Xử lý điều khiển ---
+    const keys = { right: false, left: false };
+    window.addEventListener('keydown', e => {
+        if (e.code === 'ArrowRight') { keys.right = true; player.direction = 'right'; }
+        if (e.code === 'ArrowLeft') { keys.left = true; player.direction = 'left'; }
+        if (e.code === 'Space' && player.grounded) {
+            player.dy = JUMP_FORCE;
+            player.grounded = false;
+        }
+        if (e.code === 'KeyF' && player.canShoot) {
+            fireballs.push({
+                x: player.x + (player.direction === 'right' ? player.w : -10),
+                y: player.y + player.h/2,
+                w: 12, h: 12,
+                dx: player.direction === 'right' ? 10 : -10,
+                bounce: 0
+            });
+        }
+    });
+    window.addEventListener('keyup', e => {
+        if (e.code === 'ArrowRight') keys.right = false;
+        if (e.code === 'ArrowLeft') keys.left = false;
+    });
+
+    // --- Hàm xử lý va chạm ---
+    function checkCollision(r1, r2) {
+        return r1.x < r2.x + r2.w && r1.x + r1.w > r2.x &&
+               r1.y < r2.y + r2.h && r1.y + r1.h > r2.y;
+    }
+
+    // --- Vòng lặp cập nhật Game ---
+    function update() {
+        if (!gameActive) return;
+
+        // Di chuyển ngang
+        if (keys.right) player.dx = MARIO_SPEED;
+        else if (keys.left) player.dx = -MARIO_SPEED;
+        else player.dx *= FRICTION;
+
+        player.x += player.dx;
+
+        // Va chạm ngang với platform
+        platforms.forEach(p => {
+            if (checkCollision(player, p)) {
+                if (player.dx > 0) player.x = p.x - player.w;
+                if (player.dx < 0) player.x = p.x + p.w;
+            }
+        });
+
+        // Di chuyển dọc
+        player.dy += GRAVITY;
+        player.y += player.dy;
+        player.grounded = false;
+
+        // Va chạm dọc với platform
+        platforms.forEach(p => {
+            if (checkCollision(player, p)) {
+                if (player.dy > 0) { // Rơi xuống đất
+                    player.y = p.y - player.h;
+                    player.dy = 0;
+                    player.grounded = true;
+                } else if (player.dy < 0) { // Cụng đầu vào khối
+                    player.y = p.y + p.h;
+                    player.dy = 1;
+                    if (p.type === 'lucky' && !p.used) {
+                        p.used = true;
+                        if (p.content === 'mushroom') {
+                            items.push({ x: p.x, y: p.y - 40, w: 35, h: 35, dx: 2, type: 'mushroom' });
+                        } else {
+                            score += 100;
+                        }
+                    }
+                }
+            }
+        });
+
+        // Cập nhật Nấm
+        items.forEach((it, i) => {
+            it.x += it.dx;
+            it.y += 5;
+            platforms.forEach(p => { if (checkCollision(it, p)) it.y = p.y - it.h; });
+            if (checkCollision(player, it)) {
+                if (!player.isBig) {
+                    player.isBig = true;
+                    player.canShoot = true;
+                    player.y -= 30;
+                    player.h = 75; // Phóng to
+                    document.getElementById('stt').innerText = "FIRE MARIO";
+                }
+                items.splice(i, 1);
+                score += 500;
+            }
+        });
+
+        // Cập nhật Đạn lửa
+        fireballs.forEach((f, i) => {
+            f.x += f.dx;
+            f.y += Math.sin(f.x * 0.1) * 2; // Hiệu ứng đạn bay nhấp nhô
+            enemies.forEach(en => {
+                if (en.alive && checkCollision(f, en)) {
+                    en.alive = false;
+                    fireballs.splice(i, 1);
+                    score += 200;
+                }
+            });
+            if (Math.abs(f.x - player.x) > 600) fireballs.splice(i, 1);
+        });
+
+        // Cập nhật Kẻ địch
+        enemies.forEach(en => {
+            if (!en.alive) return;
+            en.x += en.dx;
+            // Đảo hướng khi chạm vật cản (đơn giản hóa)
+            if (en.x < 0 || en.x % 400 === 0) en.dx *= -1;
+
+            if (checkCollision(player, en)) {
+                if (player.dy > 0 && player.y + player.h < en.y + 20) {
+                    en.alive = false;
+                    player.dy = -10;
+                    score += 150;
+                } else {
+                    if (player.isBig) {
+                        player.isBig = false;
+                        player.canShoot = false;
+                        player.h = 48;
+                        player.y += 20;
+                        en.alive = false;
+                        document.getElementById('stt').innerText = "SMALL";
+                    } else {
+                        gameActive = false;
+                        alert("GAME OVER! Score: " + score);
+                        location.reload();
+                    }
+                }
+            }
+        });
+
+        // Cuộn màn hình
+        if (player.x > 300) scrollOffset = player.x - 300;
+
+        document.getElementById('scr').innerText = score.toString().padStart(6, '0');
+        draw();
+        requestAnimationFrame(update);
+    }
+
+    // --- Hàm vẽ đồ họa ---
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Vẽ bầu trời và mây (đơn giản hóa từ hình ảnh)
+        ctx.fillStyle = "#87CEEB"; 
+        ctx.save();
+        ctx.translate(-scrollOffset * 0.5, 0); // Hiệu ứng Parallax cho mây
+        ctx.fillStyle = "white";
+        for(let i=0; i<10; i++) {
+            ctx.beginPath();
+            ctx.arc(100 + i*400, 50, 30, 0, Math.PI*2);
+            ctx.arc(130 + i*400, 50, 40, 0, Math.PI*2);
+            ctx.arc(160 + i*400, 50, 30, 0, Math.PI*2);
+            ctx.fill();
+        }
+        ctx.restore();
+
+        ctx.save();
+        ctx.translate(-scrollOffset, 0);
+
+        // Vẽ Platforms
+        platforms.forEach(p => {
+            if (p.type === 'ground') {
+                ctx.fillStyle = "#71bc06"; // Màu cỏ xanh từ ảnh
+                ctx.fillRect(p.x, p.y, p.w, 20);
+                ctx.fillStyle = "#8B4513"; // Màu đất nâu
+                ctx.fillRect(p.x, p.y + 20, p.w, p.h - 20);
+            } else if (p.type === 'pipe') {
+                ctx.fillStyle = "#00a000";
+                ctx.fillRect(p.x, p.y, p.w, p.h);
+                ctx.strokeStyle = "black";
+                ctx.strokeRect(p.x, p.y, p.w, p.h);
+            } else {
+                ctx.fillStyle = p.type === 'lucky' ? (p.used ? "#bdc3c7" : "#f1c40f") : "#d35400";
+                ctx.fillRect(p.x, p.y, p.w, p.h);
+                ctx.strokeStyle = "rgba(0,0,0,0.2)";
+                ctx.strokeRect(p.x, p.y, p.w, p.h);
+            }
+        });
+
+        // Vẽ Mario (Dựa trên thiết kế ảnh bạn gửi)
+        ctx.save();
+        if (player.direction === 'left') {
+            ctx.translate(player.x + player.w, 0);
+            ctx.scale(-1, 1);
+            drawMarioShape(0, player.y, player.w, player.h);
+        } else {
+            drawMarioShape(player.x, player.y, player.w, player.h);
+        }
+        ctx.restore();
+
+        // Vẽ Quái (Nấm nâu Goomba)
+        enemies.forEach(en => {
+            if(en.alive) {
+                ctx.fillStyle = "#8B4513";
+                ctx.beginPath();
+                ctx.moveTo(en.x, en.y + en.h);
+                ctx.lineTo(en.x + en.w/2, en.y);
+                ctx.lineTo(en.x + en.w, en.y + en.h);
+                ctx.fill();
+            }
+        });
+
+        // Vẽ vật phẩm nấm
+        items.forEach(it => {
+            ctx.fillStyle = "red";
+            ctx.beginPath();
+            ctx.arc(it.x + it.w/2, it.y + it.h/2, it.w/2, 0, Math.PI*2);
+            ctx.fill();
+            ctx.fillStyle = "white";
+            ctx.fillRect(it.x + 8, it.y + 8, 8, 8);
+        });
+
+        // Vẽ đạn
+        fireballs.forEach(f => {
+            ctx.fillStyle = "orange";
+            ctx.beginPath();
+            ctx.arc(f.x, f.y, 6, 0, Math.PI*2);
+            ctx.fill();
+        });
+
+        ctx.restore();
+    }
+
+    // Hàm vẽ hình dáng Mario (mô phỏng theo ảnh Pixel)
+    function drawMarioShape(x, y, w, h) {
+        // Mũ
+        ctx.fillStyle = "#ff0000";
+        ctx.fillRect(x + w*0.2, y, w*0.7, h*0.2);
+        // Mặt
+        ctx.fillStyle = "#ffccaa";
+        ctx.fillRect(x + w*0.2, y + h*0.2, w*0.6, h*0.3);
+        // Quần yếm
+        ctx.fillStyle = "#0000ff";
+        ctx.fillRect(x + w*0.2, y + h*0.5, w*0.6, h*0.4);
+        // Áo đỏ
+        ctx.fillStyle = "#ff0000";
+        ctx.fillRect(x, y + h*0.5, w*0.2, h*0.3);
+        ctx.fillRect(x + w*0.8, y + h*0.5, w*0.2, h*0.3);
+        // Giày
+        ctx.fillStyle = "#5d4037";
+        ctx.fillRect(x + w*0.1, y + h*0.9, w*0.3, h*0.1);
+        ctx.fillRect(x + w*0.6, y + h*0.9, w*0.3, h*0.1);
+    }
+
+    update();
+</script>
+</body>
+</html>
